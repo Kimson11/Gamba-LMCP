@@ -1,0 +1,17 @@
+{
+    "agents": [
+        "codex",
+        "claude_code",
+        "copilot",
+        "gemini"
+    ],
+    "guidelines": true,
+    "herd_mcp": true,
+    "mcp": true,
+    "nightwatch_mcp": false,
+    "sail": false,
+    "skills": [
+        "pest-testing",
+        "tailwindcss-development"
+    ]
+}
