@@ -2,6 +2,7 @@
 
 use App\Http\Middleware\AttachRequestContext;
 use App\Http\Middleware\HandleIdempotency;
+use App\Http\Middleware\RequireRole;
 use App\Support\ApiResponse;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Application;
@@ -21,6 +22,9 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->append(AttachRequestContext::class);
         $middleware->alias([
             'idempotency' => HandleIdempotency::class,
+            // role:<role1>,<role2>  — restrict access to specific UserRole values.
+            // Example usage on a route: ->middleware('role:coop_admin,system_admin')
+            'role' => RequireRole::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

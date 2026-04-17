@@ -2,23 +2,44 @@
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
+use App\Enums\UserRole;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Laravel\Sanctum\HasApiTokens;
 
-#[Fillable(['name', 'email', 'password'])]
+/**
+ * The central user model for the LMCP platform.
+ *
+ * Each user has:
+ *  - one role (e.g. UserRole::Member, UserRole::CoopAdmin)
+ *  - one or more scope assignments that define *where* the role applies
+ *  - API tokens managed by Sanctum for mobile/API authentication
+ *
+ * The role is stored as a string enum column directly on this model.
+ * Scopes are stored in the 'user_scopes' table (via the Role model).
+ *
+ * @property int $id
+ * @property string $name
+ * @property string $email
+ * @property UserRole $role
+ */
+#[Fillable(['name', 'email', 'password', 'role'])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */
-    use HasFactory, Notifiable;
+    use HasApiTokens, HasFactory, Notifiable;
 
     /**
-     * Get the attributes that should be cast.
+     * Attribute casting rules.
+     *
+     * 'role' is cast to the UserRole enum so we can use
+     * $user->role === UserRole::Member rather than comparing raw strings.
      *
      * @return array<string, string>
      */
@@ -27,6 +48,49 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            // Cast the raw 'member' string to UserRole::Member automatically
+            'role' => UserRole::class,
         ];
+    }
+
+    /**
+     * All scope assignments for this user.
+     *
+     * A user may have multiple scopes (e.g. a supervisor assigned to
+     * two clusters). Use this relationship to check resource access.
+     *
+     * Usage:
+     *   $user->scopes->where('scope_type', 'cooperative')->first()->scope_id
+     *
+     * @return HasMany<Role, $this>
+     */
+    public function scopes(): HasMany
+    {
+        return $this->hasMany(Role::class);
+    }
+
+    /**
+     * Quick check: does the user operate within a specific cooperative?
+     *
+     * Example:
+     *   $user->hasCooperativeScope(7) // true if assigned to cooperative #7
+     */
+    public function hasCooperativeScope(int $cooperativeId): bool
+    {
+        return $this->scopes()
+            ->where('scope_type', 'cooperative')
+            ->where('scope_id', $cooperativeId)
+            ->exists();
+    }
+
+    /**
+     * Whether this user's role requires MFA / privileged-session enforcement.
+     *
+     * Delegates to the UserRole enum's isPrivileged() helper.
+     * Usage: if ($user->isPrivileged()) { abort(403, 'MFA required'); }
+     */
+    public function isPrivileged(): bool
+    {
+        return $this->role->isPrivileged();
     }
 }
