@@ -1,8 +1,11 @@
 <?php
 
 use App\Http\Middleware\AttachRequestContext;
+use App\Http\Middleware\EnsureAdminRole;
 use App\Http\Middleware\HandleIdempotency;
+use App\Http\Middleware\RequirePrivilegedSession;
 use App\Http\Middleware\RequireRole;
+use App\Http\Middleware\RequireWebPrivilegedSession;
 use App\Support\ApiResponse;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Application;
@@ -25,6 +28,10 @@ return Application::configure(basePath: dirname(__DIR__))
             // role:<role1>,<role2>  — restrict access to specific UserRole values.
             // Example usage on a route: ->middleware('role:coop_admin,system_admin')
             'role' => RequireRole::class,
+            // privileged_session enforces MFA and trusted-device checks for privileged roles.
+            'privileged_session' => RequirePrivilegedSession::class,
+            'admin.role' => EnsureAdminRole::class,
+            'web.privileged_session' => RequireWebPrivilegedSession::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
@@ -34,7 +41,7 @@ return Application::configure(basePath: dirname(__DIR__))
             }
 
             return ApiResponse::error(
-                message: 'Validation failed.',
+                message: __('api.errors.validation_failed'),
                 code: 'validation_failed',
                 status: 422,
                 errors: $exception->errors(),
@@ -47,7 +54,7 @@ return Application::configure(basePath: dirname(__DIR__))
             }
 
             return ApiResponse::error(
-                message: 'You are not authorized to perform this action.',
+                message: __('api.errors.permission_denied'),
                 code: 'permission_denied',
                 status: 403,
             );

@@ -28,8 +28,8 @@ use Laravel\Sanctum\HasApiTokens;
  * @property string $email
  * @property UserRole $role
  */
-#[Fillable(['name', 'email', 'password', 'role'])]
-#[Hidden(['password', 'remember_token'])]
+#[Fillable(['name', 'email', 'password', 'role', 'mfa_enabled', 'mfa_secret_rotated_at'])]
+#[Hidden(['password', 'remember_token', 'mfa_secret_encrypted'])]
 class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */
@@ -50,6 +50,8 @@ class User extends Authenticatable
             'password' => 'hashed',
             // Cast the raw 'member' string to UserRole::Member automatically
             'role' => UserRole::class,
+            'mfa_enabled' => 'boolean',
+            'mfa_secret_rotated_at' => 'datetime',
         ];
     }
 
@@ -67,6 +69,19 @@ class User extends Authenticatable
     public function scopes(): HasMany
     {
         return $this->hasMany(Role::class);
+    }
+
+    /**
+     * All trusted devices linked to this user.
+     *
+     * These records are used by privileged-session middleware to ensure
+     * high-risk transitions only happen from enrolled, non-revoked devices.
+     *
+     * @return HasMany<TrustedDevice, $this>
+     */
+    public function trustedDevices(): HasMany
+    {
+        return $this->hasMany(TrustedDevice::class);
     }
 
     /**

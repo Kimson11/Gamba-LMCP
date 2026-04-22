@@ -9,6 +9,7 @@ use App\Models\Member;
 use App\Models\MilkProductionLog;
 use App\Services\AuditLogger;
 use App\Support\ApiResponse;
+use App\Support\ScopeAccess;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -16,6 +17,7 @@ class MilkProductionController extends Controller
 {
     public function __construct(
         private readonly AuditLogger $auditLogger,
+        private readonly ScopeAccess $scopeAccess,
     ) {}
 
     /**
@@ -26,6 +28,10 @@ class MilkProductionController extends Controller
         $validated = $request->validated();
         $actor = $request->user();
         $member = Member::query()->findOrFail((int) $validated['member_id']);
+
+        if (! $this->scopeAccess->canAccessMember($actor, $member)) {
+            return $this->forbiddenScopeResponse();
+        }
 
         $log = MilkProductionLog::query()->create([
             'cooperative_id' => $member->cooperative_id,
@@ -68,8 +74,12 @@ class MilkProductionController extends Controller
     /**
      * List milk production logs for one cluster.
      */
-    public function indexByCluster(Cluster $cluster): JsonResponse
+    public function indexByCluster(Request $request, Cluster $cluster): JsonResponse
     {
+        if (! $this->scopeAccess->canAccessCluster($request->user(), $cluster)) {
+            return $this->forbiddenScopeResponse();
+        }
+
         $logs = MilkProductionLog::query()
             ->where('cluster_id', $cluster->id)
             ->orderByDesc('production_date')
@@ -100,6 +110,10 @@ class MilkProductionController extends Controller
      */
     public function dailyTotalsByCluster(Request $request, Cluster $cluster): JsonResponse
     {
+        if (! $this->scopeAccess->canAccessCluster($request->user(), $cluster)) {
+            return $this->forbiddenScopeResponse();
+        }
+
         $validated = $request->validate([
             'from_date' => ['nullable', 'date'],
             'to_date' => ['nullable', 'date', 'after_or_equal:from_date'],
@@ -137,6 +151,10 @@ class MilkProductionController extends Controller
      */
     public function dailyTotalsByMember(Request $request, Member $member): JsonResponse
     {
+        if (! $this->scopeAccess->canAccessMember($request->user(), $member)) {
+            return $this->forbiddenScopeResponse();
+        }
+
         $validated = $request->validate([
             'from_date' => ['nullable', 'date'],
             'to_date' => ['nullable', 'date', 'after_or_equal:from_date'],
@@ -168,5 +186,14 @@ class MilkProductionController extends Controller
             'to_date' => $toDate,
             'items' => $dailyTotals,
         ]);
+    }
+
+    private function forbiddenScopeResponse(): JsonResponse
+    {
+        return ApiResponse::error(
+            message: 'You are not authorized to access this resource within your assigned scope.',
+            code: 'permission_denied',
+            status: 403,
+        );
     }
 }

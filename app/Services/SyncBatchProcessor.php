@@ -216,6 +216,9 @@ class SyncBatchProcessor
         //   }
         $conflictBreakdown = (clone $query)
             ->where('status', 'conflict')
+            // Keep this breakdown actionable: only unresolved conflicts should
+            // appear in remediation dashboards.
+            ->where('resolution_required', true)
             ->whereNotNull('conflict_code')
             ->selectRaw('conflict_code, COUNT(*) as aggregate')
             ->groupBy('conflict_code')
@@ -269,17 +272,129 @@ class SyncBatchProcessor
      *
      * @return array<string, mixed>
      */
-    public function conflicts(User $actor, int $perPage = 15): array
+    public function conflicts(User $actor, int $perPage = 15, array $filters = []): array
     {
         $query = SyncReplayItem::query()
             ->where('status', 'conflict')
-            ->where('resolution_required', true)
-            ->latest('processed_at');
+            ->where('resolution_required', true);
 
         if (! $actor->isPrivileged()) {
             $query->where('actor_id', $actor->id);
         } else {
             $query->where('cooperative_scope_id', $this->cooperativeScopeId($actor));
+        }
+
+        $conflictCode = isset($filters['conflict_code']) && is_string($filters['conflict_code']) && $filters['conflict_code'] !== ''
+            ? $filters['conflict_code']
+            : null;
+
+        if ($conflictCode !== null) {
+            $query->where('conflict_code', $conflictCode);
+        }
+
+        $minAgeHours = isset($filters['min_age_hours']) && is_int($filters['min_age_hours'])
+            ? $filters['min_age_hours']
+            : null;
+
+        if ($minAgeHours !== null) {
+            $query->where('processed_at', '<=', now()->subHours($minAgeHours));
+        }
+
+        $priorityRank = isset($filters['priority_rank']) && is_int($filters['priority_rank'])
+            ? $filters['priority_rank']
+            : null;
+
+        if ($priorityRank !== null) {
+            $query->whereRaw(
+                $this->conflictPriorityCaseSql().' = ?',
+                [...$this->conflictPriorityCaseBindings(), $priorityRank],
+            );
+        }
+
+        // Queue-level aggregates are computed on the filtered unresolved queue
+        // (before pagination) so dashboards can render accurate reviewer workload.
+        $priorityCountsRaw = (clone $query)
+            ->selectRaw(
+                $this->conflictPriorityCaseSql().' AS priority_rank, COUNT(*) AS aggregate',
+                $this->conflictPriorityCaseBindings(),
+            )
+            ->groupBy('priority_rank')
+            ->pluck('aggregate', 'priority_rank')
+            ->toArray();
+
+        $priorityCounts = [
+            '1' => (int) ($priorityCountsRaw[1] ?? $priorityCountsRaw['1'] ?? 0),
+            '2' => (int) ($priorityCountsRaw[2] ?? $priorityCountsRaw['2'] ?? 0),
+            '3' => (int) ($priorityCountsRaw[3] ?? $priorityCountsRaw['3'] ?? 0),
+        ];
+
+        /** @var SyncReplayItem|null $oldestConflict */
+        $oldestConflict = (clone $query)
+            ->orderBy('processed_at')
+            ->orderBy('id')
+            ->first(['processed_at']);
+
+        $oldestConflictAgeSeconds = $oldestConflict?->processed_at !== null
+            ? (int) $oldestConflict->processed_at->diffInSeconds(now())
+            : null;
+
+        $slaHours = $this->conflictSlaHours();
+        $oneHourAgo = now()->subHours($slaHours['lt_1h']);
+        $fourHoursAgo = now()->subHours($slaHours['lt_4h']);
+        $oneDayAgo = now()->subHours($slaHours['lt_24h']);
+
+        $slaBucketsRaw = (clone $query)
+            ->selectRaw(
+                "CASE WHEN processed_at >= ? THEN '<1h' WHEN processed_at >= ? THEN '1-4h' WHEN processed_at >= ? THEN '4-24h' ELSE '>24h' END AS sla_bucket, COUNT(*) AS aggregate",
+                [$oneHourAgo, $fourHoursAgo, $oneDayAgo],
+            )
+            ->groupBy('sla_bucket')
+            ->pluck('aggregate', 'sla_bucket')
+            ->toArray();
+
+        $slaBuckets = [
+            '<1h' => (int) ($slaBucketsRaw['<1h'] ?? 0),
+            '1-4h' => (int) ($slaBucketsRaw['1-4h'] ?? 0),
+            '4-24h' => (int) ($slaBucketsRaw['4-24h'] ?? 0),
+            '>24h' => (int) ($slaBucketsRaw['>24h'] ?? 0),
+        ];
+
+        $ageSamples = (clone $query)
+            ->get(['processed_at'])
+            ->map(fn (SyncReplayItem $item): ?int => $item->processed_at !== null
+                ? (int) $item->processed_at->diffInSeconds(now())
+                : null)
+            ->filter(fn (?int $age): bool => $age !== null)
+            ->values();
+
+        $totalUnresolvedConflicts = $ageSamples->count();
+        $averageConflictAgeSeconds = $totalUnresolvedConflicts > 0
+            ? (int) round(((int) $ageSamples->sum()) / $totalUnresolvedConflicts)
+            : null;
+
+        // Queue ordering policy:
+        //  1) privileged-only conflicts first
+        //  2) dependency conflicts next
+        //  3) all other conflicts after that
+        // Within the same priority rank, oldest processed conflict is surfaced first.
+        $sortBy = is_string($filters['sort_by'] ?? null) ? $filters['sort_by'] : 'priority';
+
+        if ($sortBy === 'newest') {
+            $query
+                ->orderByDesc('processed_at')
+                ->orderByDesc('id');
+        } elseif ($sortBy === 'oldest') {
+            $query
+                ->orderBy('processed_at')
+                ->orderBy('id');
+        } else {
+            $query
+                ->orderByRaw(
+                    $this->conflictPriorityCaseSql(),
+                    $this->conflictPriorityCaseBindings(),
+                )
+                ->orderBy('processed_at')
+                ->orderBy('id');
         }
 
         $paginator = $query->paginate($perPage);
@@ -288,6 +403,31 @@ class SyncBatchProcessor
             'items' => $paginator->getCollection()
                 ->map(fn (SyncReplayItem $item): array => $this->serializeConflict($item))
                 ->all(),
+            'queue_meta' => [
+                'applied_filters' => [
+                    'conflict_code' => $conflictCode,
+                    'min_age_hours' => $minAgeHours,
+                    'priority_rank' => $priorityRank,
+                ],
+                'sort_by' => $sortBy,
+                'ordering_policy' => $sortBy === 'priority'
+                    ? 'priority_then_oldest'
+                    : $sortBy,
+                'priority_counts' => $priorityCounts,
+                'oldest_conflict_age_seconds' => $oldestConflictAgeSeconds,
+                'sla_buckets' => $slaBuckets,
+                'total_unresolved_conflicts' => $totalUnresolvedConflicts,
+                'average_conflict_age_seconds' => $averageConflictAgeSeconds,
+                'recommended_next_actions' => $this->recommendedNextActions(
+                    priorityCounts: $priorityCounts,
+                    slaBuckets: $slaBuckets,
+                ),
+                'reviewer_capacity_hint' => $this->reviewerCapacityHint(
+                    totalUnresolvedConflicts: $totalUnresolvedConflicts,
+                    priorityCounts: $priorityCounts,
+                    slaBuckets: $slaBuckets,
+                ),
+            ],
             'pagination' => [
                 'current_page' => $paginator->currentPage(),
                 'last_page' => $paginator->lastPage(),
@@ -1063,6 +1203,8 @@ class SyncBatchProcessor
      */
     private function serializeConflict(SyncReplayItem $item): array
     {
+        $priorityRank = $this->conflictPriorityRank($item);
+
         return [
             'id' => $item->id,
             'actor_id' => $item->actor_id,
@@ -1079,8 +1221,153 @@ class SyncBatchProcessor
             'resolution_reason' => $item->resolution_reason,
             'resolved_by_user_id' => $item->resolved_by_user_id,
             'resolved_at' => $item->resolved_at?->toIso8601String(),
+            'priority_rank' => $priorityRank,
+            'priority_label' => $this->conflictPriorityLabel($priorityRank),
+            'conflict_age_seconds' => $item->processed_at !== null
+                ? (int) $item->processed_at->diffInSeconds(now())
+                : null,
+            'conflict_age_hours' => $item->processed_at !== null
+                ? (int) $item->processed_at->diffInHours(now())
+                : null,
             'processed_at' => $item->processed_at?->toIso8601String(),
         ];
+    }
+
+    /**
+     * Resolve queue priority rank for one conflict row.
+     */
+    private function conflictPriorityRank(SyncReplayItem $item): int
+    {
+        if ($this->requiresPrivilegedResolver($item)) {
+            return 1;
+        }
+
+        if ((string) $item->conflict_code === 'dependency_failed') {
+            return 2;
+        }
+
+        return 3;
+    }
+
+    /**
+     * SQL CASE expression used for conflict priority ordering and filtering.
+     */
+    private function conflictPriorityCaseSql(): string
+    {
+        return 'CASE WHEN conflict_code IN (?, ?, ?, ?) THEN 1 WHEN conflict_code = ? THEN 2 ELSE 3 END';
+    }
+
+    /**
+     * Bindings for conflict priority CASE expression.
+     *
+     * @return array<int, string>
+     */
+    private function conflictPriorityCaseBindings(): array
+    {
+        return [
+            ...self::PRIVILEGED_ONLY_CONFLICT_CODES,
+            'dependency_failed',
+        ];
+    }
+
+    /**
+     * Build reviewer guidance hints for the current filtered queue.
+     *
+     * @param  array{1?:int,2?:int,3?:int,'1'?:int,'2'?:int,'3'?:int}  $priorityCounts
+     * @param  array{'<1h'?:int,'1-4h'?:int,'4-24h'?:int,'>24h'?:int}  $slaBuckets
+     * @return array<string, string>
+     */
+    private function recommendedNextActions(array $priorityCounts, array $slaBuckets): array
+    {
+        $highPriorityCount = (int) ($priorityCounts['1'] ?? $priorityCounts[1] ?? 0);
+        $mediumPriorityCount = (int) ($priorityCounts['2'] ?? $priorityCounts[2] ?? 0);
+        $normalPriorityCount = (int) ($priorityCounts['3'] ?? $priorityCounts[3] ?? 0);
+        $staleOver24HoursCount = (int) ($slaBuckets['>24h'] ?? 0);
+
+        return [
+            'priority_1' => $highPriorityCount > 0
+                ? 'review_with_privileged_reviewer'
+                : 'none',
+            'priority_2' => $mediumPriorityCount > 0
+                ? 'resolve_dependency_chain'
+                : 'none',
+            'priority_3' => $normalPriorityCount > 0
+                ? 'review_standard_conflict_queue'
+                : 'none',
+            'sla_breach' => $staleOver24HoursCount > 0
+                ? 'expedite_oldest_conflicts'
+                : 'none',
+        ];
+    }
+
+    /**
+     * Resolve SLA hour thresholds from configuration with safe fallbacks.
+     *
+     * @return array{lt_1h:int,lt_4h:int,lt_24h:int}
+     */
+    private function conflictSlaHours(): array
+    {
+        $configuredOneHour = (int) config('sync.conflicts.sla_hours.lt_1h', 1);
+        $configuredFourHours = (int) config('sync.conflicts.sla_hours.lt_4h', 4);
+        $configuredTwentyFourHours = (int) config('sync.conflicts.sla_hours.lt_24h', 24);
+
+        $oneHour = $configuredOneHour > 0 ? $configuredOneHour : 1;
+        $fourHours = $configuredFourHours > $oneHour ? $configuredFourHours : 4;
+        $twentyFourHours = $configuredTwentyFourHours > $fourHours ? $configuredTwentyFourHours : 24;
+
+        return [
+            'lt_1h' => $oneHour,
+            'lt_4h' => $fourHours,
+            'lt_24h' => $twentyFourHours,
+        ];
+    }
+
+    /**
+     * Provide a queue-level reviewer capacity hint for operational dashboards.
+     *
+     * @param  array{1?:int,2?:int,3?:int,'1'?:int,'2'?:int,'3'?:int}  $priorityCounts
+     * @param  array{'<1h'?:int,'1-4h'?:int,'4-24h'?:int,'>24h'?:int}  $slaBuckets
+     */
+    private function reviewerCapacityHint(int $totalUnresolvedConflicts, array $priorityCounts, array $slaBuckets): string
+    {
+        $highPriorityCount = (int) ($priorityCounts['1'] ?? $priorityCounts[1] ?? 0);
+        $staleOver24HoursCount = (int) ($slaBuckets['>24h'] ?? 0);
+
+        $criticalTotalThreshold = (int) config('sync.conflicts.capacity.critical_total', 30);
+        $criticalHighPriorityThreshold = (int) config('sync.conflicts.capacity.critical_high_priority', 5);
+        $criticalStaleThreshold = (int) config('sync.conflicts.capacity.critical_stale_over_24h', 1);
+
+        if (
+            $totalUnresolvedConflicts >= $criticalTotalThreshold
+            || $highPriorityCount >= $criticalHighPriorityThreshold
+            || $staleOver24HoursCount >= $criticalStaleThreshold
+        ) {
+            return 'critical';
+        }
+
+        $elevatedTotalThreshold = (int) config('sync.conflicts.capacity.elevated_total', 10);
+        $elevatedHighPriorityThreshold = (int) config('sync.conflicts.capacity.elevated_high_priority', 1);
+
+        if (
+            $totalUnresolvedConflicts >= $elevatedTotalThreshold
+            || $highPriorityCount >= $elevatedHighPriorityThreshold
+        ) {
+            return 'elevated';
+        }
+
+        return 'normal';
+    }
+
+    /**
+     * Convert numeric priority rank to a human-readable label.
+     */
+    private function conflictPriorityLabel(int $priorityRank): string
+    {
+        return match ($priorityRank) {
+            1 => 'high',
+            2 => 'medium',
+            default => 'normal',
+        };
     }
 
     /**

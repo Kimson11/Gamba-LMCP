@@ -99,4 +99,21 @@ enum UserRole: string
     {
         return in_array($this, self::privileged(), strict: true);
     }
+
+    /**
+     * Whether this role should be allowed into the Laravel admin portal.
+     */
+    public function canAccessAdminPortal(): bool
+    {
+        return in_array($this, [
+            self::SystemAdmin,
+            self::CountryAdmin,
+            self::CoopAdmin,
+            self::ClusterSupervisor,
+            self::FinanceOfficer,
+            self::Treasurer,
+            self::MarketplaceManager,
+            self::Auditor,
+        ], strict: true);
+    }
 }

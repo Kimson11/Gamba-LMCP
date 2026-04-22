@@ -3,9 +3,13 @@
 use App\Http\Controllers\Api\V1\ApprovalEventController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\ClusterController;
+use App\Http\Controllers\Api\V1\ConfigurationController;
 use App\Http\Controllers\Api\V1\CooperativeController;
+use App\Http\Controllers\Api\V1\DashboardController;
 use App\Http\Controllers\Api\V1\MemberController;
 use App\Http\Controllers\Api\V1\MilkProductionController;
+use App\Http\Controllers\Api\V1\NotificationController;
+use App\Http\Controllers\Api\V1\PrivilegedAccessController;
 use App\Http\Controllers\Api\V1\SyncController;
 use App\Http\Controllers\Api\V1\SystemController;
 use Illuminate\Support\Facades\Route;
@@ -37,8 +41,24 @@ Route::prefix('v1')->group(function (): void {
     // All routes inside this group require a valid Sanctum token.
     // If the token is missing or expired, Laravel returns 401 automatically.
     Route::middleware('auth:sanctum')->group(function (): void {
+        Route::get('/auth/me', [AuthController::class, 'me']);
+
         // Revoke the current device's token (single-device logout).
         Route::post('/auth/logout', [AuthController::class, 'logout']);
+
+        // Privileged access foundation endpoints (MFA/trusted device/session revocation).
+        Route::prefix('/auth/security')->group(function (): void {
+            Route::get('/status', [PrivilegedAccessController::class, 'status']);
+
+            Route::middleware('idempotency')->group(function (): void {
+                Route::post('/mfa/enable', [PrivilegedAccessController::class, 'enableMfa']);
+                Route::post('/mfa/rotate', [PrivilegedAccessController::class, 'rotateMfaSecret']);
+                Route::post('/mfa/disable', [PrivilegedAccessController::class, 'disableMfa']);
+                Route::post('/trusted-devices', [PrivilegedAccessController::class, 'enrollTrustedDevice']);
+                Route::post('/trusted-devices/{trustedDevice}/revoke', [PrivilegedAccessController::class, 'revokeTrustedDevice']);
+                Route::post('/sessions/revoke-other', [PrivilegedAccessController::class, 'revokeOtherSessions']);
+            });
+        });
 
         // Sync reconciliation endpoints.
         // POST /sync/batch processes offline replay items in request order.
@@ -51,10 +71,20 @@ Route::prefix('v1')->group(function (): void {
         Route::get('/sync/conflicts/{syncReplayItem}', [SyncController::class, 'conflict']);
         // GET /sync/conflicts/{id}/history returns append-only action timeline.
         Route::get('/sync/conflicts/{syncReplayItem}/history', [SyncController::class, 'conflictHistory']);
-        // POST /sync/conflicts/{id}/resolve executes a supported resolution action.
-        Route::post('/sync/conflicts/{syncReplayItem}/resolve', [SyncController::class, 'resolveConflict']);
-        // POST /sync/conflicts/{id}/notes adds reviewer notes to the timeline.
-        Route::post('/sync/conflicts/{syncReplayItem}/notes', [SyncController::class, 'addConflictNote']);
+        Route::middleware('idempotency')->group(function (): void {
+            // POST /sync/conflicts/{id}/resolve executes a supported resolution action.
+            Route::post('/sync/conflicts/{syncReplayItem}/resolve', [SyncController::class, 'resolveConflict']);
+            // POST /sync/conflicts/{id}/notes adds reviewer notes to the timeline.
+            Route::post('/sync/conflicts/{syncReplayItem}/notes', [SyncController::class, 'addConflictNote']);
+            Route::post('/notifications/{notification}/read', [NotificationController::class, 'markRead']);
+        });
+
+        Route::get('/notifications', [NotificationController::class, 'index']);
+
+        Route::middleware('role:member')->group(function (): void {
+            Route::get('/member-home', [DashboardController::class, 'memberHome']);
+            Route::get('/member/dashboard', [DashboardController::class, 'memberHome']);
+        });
 
         // Cooperative structure foundation endpoints.
         // Read endpoints available to operational and governance roles.
@@ -79,8 +109,34 @@ Route::prefix('v1')->group(function (): void {
             Route::post('/clusters', [ClusterController::class, 'store']);
             Route::post('/members', [MemberController::class, 'store']);
             Route::post('/members/{member}/assign-cluster', [MemberController::class, 'assignCluster']);
+        });
+
+        Route::middleware([
+            'role:system_admin,country_admin,coop_admin',
+            'privileged_session',
+            'idempotency',
+        ])->group(function (): void {
             Route::post('/member-assignments/{memberAssignment}/approve', [MemberController::class, 'approveAssignment']);
             Route::post('/member-assignments/{memberAssignment}/reject', [MemberController::class, 'rejectAssignment']);
+        });
+
+        Route::middleware([
+            'role:system_admin,country_admin,coop_admin',
+            'privileged_session',
+        ])->group(function (): void {
+            Route::get('/configurations', [ConfigurationController::class, 'index']);
+
+            Route::middleware('idempotency')->group(function (): void {
+                // Configuration writes are privileged and require elevated session proof.
+                Route::put('/configurations/{key}', [ConfigurationController::class, 'upsert']);
+            });
+        });
+
+        Route::middleware([
+            'role:system_admin,country_admin,coop_admin,cluster_supervisor',
+            'privileged_session',
+        ])->group(function (): void {
+            Route::get('/admin/dashboard-summary', [DashboardController::class, 'adminSummary']);
         });
 
         Route::middleware([
@@ -102,6 +158,7 @@ Route::prefix('v1')->group(function (): void {
         // Roles used here come from the UserRole enum values.
         Route::middleware([
             'role:system_admin,country_admin,coop_admin,finance_officer,treasurer,marketplace_manager',
+            'privileged_session',
             'idempotency',
         ])->group(function (): void {
             Route::post('/approvals/{entityType}/{entityId}/approve', [ApprovalEventController::class, 'approve']);

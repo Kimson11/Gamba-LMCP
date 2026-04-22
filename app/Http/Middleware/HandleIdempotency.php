@@ -30,7 +30,7 @@ class HandleIdempotency
 
             if (! is_string($idempotencyKey) || $idempotencyKey === '') {
                 return ApiResponse::error(
-                    message: 'Idempotency-Key header is required for write requests.',
+                    message: __('api.errors.idempotency_key_required'),
                     code: 'idempotency_key_required',
                     status: 400,
                 );
@@ -53,7 +53,7 @@ class HandleIdempotency
                 // A reused key must carry the exact same normalized payload hash.
                 if ($existing->request_hash !== $requestHash) {
                     return ApiResponse::error(
-                        message: 'Request conflicts with a previous submission for this idempotency key.',
+                        message: __('api.errors.idempotency_payload_mismatch'),
                         code: 'duplicate_with_payload_mismatch',
                         status: 409,
                     );

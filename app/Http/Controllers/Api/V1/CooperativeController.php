@@ -6,18 +6,24 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\CreateCooperativeRequest;
 use App\Models\Cooperative;
 use App\Support\ApiResponse;
+use App\Support\ScopeAccess;
 use Illuminate\Http\JsonResponse;
 
 class CooperativeController extends Controller
 {
+    public function __construct(
+        private readonly ScopeAccess $scopeAccess,
+    ) {}
+
     /**
      * Return paginated cooperatives for admin/cooperative operators.
      */
     public function index(): JsonResponse
     {
-        $paginator = Cooperative::query()
-            ->orderBy('name')
-            ->paginate(20);
+        $query = Cooperative::query()->orderBy('name');
+        $this->scopeAccess->applyCooperativeScope(request()->user(), $query);
+
+        $paginator = $query->paginate(20);
 
         return ApiResponse::success([
             'items' => $paginator->getCollection()->map(fn (Cooperative $cooperative): array => [

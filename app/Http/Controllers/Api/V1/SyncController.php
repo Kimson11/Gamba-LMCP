@@ -87,6 +87,10 @@ class SyncController extends Controller
     {
         $validated = $request->validate([
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+            'conflict_code' => ['nullable', 'string', 'max:100'],
+            'min_age_hours' => ['nullable', 'integer', 'min:1', 'max:720'],
+            'priority_rank' => ['nullable', 'integer', 'in:1,2,3'],
+            'sort_by' => ['nullable', 'string', 'in:priority,oldest,newest'],
         ]);
 
         $actor = $request->user();
@@ -94,6 +98,12 @@ class SyncController extends Controller
         $conflicts = $this->syncBatchProcessor->conflicts(
             actor: $actor,
             perPage: (int) ($validated['per_page'] ?? 15),
+            filters: [
+                'conflict_code' => $validated['conflict_code'] ?? null,
+                'min_age_hours' => isset($validated['min_age_hours']) ? (int) $validated['min_age_hours'] : null,
+                'priority_rank' => isset($validated['priority_rank']) ? (int) $validated['priority_rank'] : null,
+                'sort_by' => $validated['sort_by'] ?? null,
+            ],
         );
 
         return ApiResponse::success($conflicts);

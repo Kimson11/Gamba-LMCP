@@ -5,6 +5,8 @@ use App\Models\Cluster;
 use App\Models\Cooperative;
 use App\Models\Member;
 use App\Models\MemberAssignment;
+use App\Models\Role;
+use App\Models\TrustedDevice;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
@@ -18,6 +20,12 @@ it('allows governance role to assign member to another cluster in same cooperati
         'code' => 'AS-01',
         'country_code' => 'NG',
         'status' => 'active',
+    ]);
+
+    Role::query()->create([
+        'user_id' => $admin->id,
+        'scope_type' => 'cooperative',
+        'scope_id' => $cooperative->id,
     ]);
 
     $clusterOne = Cluster::query()->create([
@@ -62,13 +70,26 @@ it('allows governance role to assign member to another cluster in same cooperati
 
 it('approves pending assignment and applies cluster change', function (): void {
     $requester = User::factory()->coopAdmin()->create();
-    $reviewer = User::factory()->systemAdmin()->create();
+    $reviewer = User::factory()->systemAdmin()->create([
+        'mfa_enabled' => true,
+    ]);
+    $trustedDevice = TrustedDevice::query()->create([
+        'user_id' => $reviewer->id,
+        'device_fingerprint' => 'member-assignment-review-device-150',
+        'device_name' => 'Reviewer Console',
+    ]);
 
     $cooperative = Cooperative::query()->create([
         'name' => 'Approve Coop',
         'code' => 'APP-01',
         'country_code' => 'NG',
         'status' => 'active',
+    ]);
+
+    Role::query()->create([
+        'user_id' => $requester->id,
+        'scope_type' => 'cooperative',
+        'scope_id' => $cooperative->id,
     ]);
 
     $clusterOne = Cluster::query()->create([
@@ -102,6 +123,8 @@ it('approves pending assignment and applies cluster change', function (): void {
 
     $approved = $this->actingAs($reviewer, 'sanctum')->postJson("/api/v1/member-assignments/{$assignmentId}/approve", [], [
         'Idempotency-Key' => 'member-assign-approve-as-150',
+        'X-MFA-Verified' => 'true',
+        'X-Trusted-Device-Id' => (string) $trustedDevice->id,
     ]);
 
     $approved
@@ -121,13 +144,26 @@ it('approves pending assignment and applies cluster change', function (): void {
 
 it('rejects pending assignment with reason and keeps member cluster unchanged', function (): void {
     $requester = User::factory()->coopAdmin()->create();
-    $reviewer = User::factory()->systemAdmin()->create();
+    $reviewer = User::factory()->systemAdmin()->create([
+        'mfa_enabled' => true,
+    ]);
+    $trustedDevice = TrustedDevice::query()->create([
+        'user_id' => $reviewer->id,
+        'device_fingerprint' => 'member-assignment-review-device-175',
+        'device_name' => 'Reviewer Console',
+    ]);
 
     $cooperative = Cooperative::query()->create([
         'name' => 'Reject Coop',
         'code' => 'REJ-01',
         'country_code' => 'NG',
         'status' => 'active',
+    ]);
+
+    Role::query()->create([
+        'user_id' => $requester->id,
+        'scope_type' => 'cooperative',
+        'scope_id' => $cooperative->id,
     ]);
 
     $clusterOne = Cluster::query()->create([
@@ -163,6 +199,8 @@ it('rejects pending assignment with reason and keeps member cluster unchanged', 
         'reason' => 'Insufficient operational justification for reassignment.',
     ], [
         'Idempotency-Key' => 'member-assign-reject-as-175',
+        'X-MFA-Verified' => 'true',
+        'X-Trusted-Device-Id' => (string) $trustedDevice->id,
     ]);
 
     $rejected
@@ -180,13 +218,26 @@ it('rejects pending assignment with reason and keeps member cluster unchanged', 
 });
 
 it('blocks self-approval for maker-checker separation', function (): void {
-    $admin = User::factory()->coopAdmin()->create();
+    $admin = User::factory()->coopAdmin()->create([
+        'mfa_enabled' => true,
+    ]);
+    $trustedDevice = TrustedDevice::query()->create([
+        'user_id' => $admin->id,
+        'device_fingerprint' => 'member-assignment-self-review-device-approve',
+        'device_name' => 'Admin Console',
+    ]);
 
     $cooperative = Cooperative::query()->create([
         'name' => 'SoD Approve Coop',
         'code' => 'SDA-01',
         'country_code' => 'NG',
         'status' => 'active',
+    ]);
+
+    Role::query()->create([
+        'user_id' => $admin->id,
+        'scope_type' => 'cooperative',
+        'scope_id' => $cooperative->id,
     ]);
 
     $clusterOne = Cluster::query()->create([
@@ -220,6 +271,8 @@ it('blocks self-approval for maker-checker separation', function (): void {
 
     $approve = $this->actingAs($admin, 'sanctum')->postJson("/api/v1/member-assignments/{$assignmentId}/approve", [], [
         'Idempotency-Key' => 'member-assign-sod-approve-action',
+        'X-MFA-Verified' => 'true',
+        'X-Trusted-Device-Id' => (string) $trustedDevice->id,
     ]);
 
     $approve
@@ -230,13 +283,26 @@ it('blocks self-approval for maker-checker separation', function (): void {
 });
 
 it('blocks self-rejection for maker-checker separation', function (): void {
-    $admin = User::factory()->coopAdmin()->create();
+    $admin = User::factory()->coopAdmin()->create([
+        'mfa_enabled' => true,
+    ]);
+    $trustedDevice = TrustedDevice::query()->create([
+        'user_id' => $admin->id,
+        'device_fingerprint' => 'member-assignment-self-review-device-reject',
+        'device_name' => 'Admin Console',
+    ]);
 
     $cooperative = Cooperative::query()->create([
         'name' => 'SoD Reject Coop',
         'code' => 'SDR-01',
         'country_code' => 'NG',
         'status' => 'active',
+    ]);
+
+    Role::query()->create([
+        'user_id' => $admin->id,
+        'scope_type' => 'cooperative',
+        'scope_id' => $cooperative->id,
     ]);
 
     $clusterOne = Cluster::query()->create([
@@ -272,6 +338,8 @@ it('blocks self-rejection for maker-checker separation', function (): void {
         'reason' => 'Self-decision should be blocked by governance rules.',
     ], [
         'Idempotency-Key' => 'member-assign-sod-reject-action',
+        'X-MFA-Verified' => 'true',
+        'X-Trusted-Device-Id' => (string) $trustedDevice->id,
     ]);
 
     $reject
@@ -287,6 +355,12 @@ it('rejects assignment when target cluster belongs to another cooperative', func
         'code' => 'CAA-01',
         'country_code' => 'NG',
         'status' => 'active',
+    ]);
+
+    Role::query()->create([
+        'user_id' => $admin->id,
+        'scope_type' => 'cooperative',
+        'scope_id' => $coopA->id,
     ]);
 
     $coopB = Cooperative::query()->create([
@@ -339,6 +413,12 @@ it('denies non-governance role from assigning members', function (): void {
         'status' => 'active',
     ]);
 
+    Role::query()->create([
+        'user_id' => $admin->id,
+        'scope_type' => 'cooperative',
+        'scope_id' => $cooperative->id,
+    ]);
+
     $cluster = Cluster::query()->create([
         'cooperative_id' => $cooperative->id,
         'name' => 'Cluster RG',
@@ -379,6 +459,12 @@ it('lists assignment timeline for a member', function (): void {
         'code' => 'TLC-01',
         'country_code' => 'NG',
         'status' => 'active',
+    ]);
+
+    Role::query()->create([
+        'user_id' => $admin->id,
+        'scope_type' => 'cooperative',
+        'scope_id' => $cooperative->id,
     ]);
 
     $clusterA = Cluster::query()->create([
@@ -434,6 +520,18 @@ it('filters assignment history by cooperative and country', function (): void {
         'code' => 'FRC-01',
         'country_code' => 'FR',
         'status' => 'active',
+    ]);
+
+    Role::query()->create([
+        'user_id' => $admin->id,
+        'scope_type' => 'cooperative',
+        'scope_id' => $ngCooperative->id,
+    ]);
+
+    Role::query()->create([
+        'user_id' => $admin->id,
+        'scope_type' => 'cooperative',
+        'scope_id' => $frCooperative->id,
     ]);
 
     $ngClusterOne = Cluster::query()->create([
@@ -506,6 +604,12 @@ it('lists pending assignment queue with filters', function (): void {
         'code' => 'PQC-01',
         'country_code' => 'NG',
         'status' => 'active',
+    ]);
+
+    Role::query()->create([
+        'user_id' => $admin->id,
+        'scope_type' => 'cooperative',
+        'scope_id' => $cooperative->id,
     ]);
 
     $clusterOne = Cluster::query()->create([

@@ -3,6 +3,7 @@
 use App\Models\Cluster;
 use App\Models\Cooperative;
 use App\Models\Member;
+use App\Models\Role;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
@@ -52,6 +53,12 @@ it('creates clusters and lists them by cooperative', function (): void {
         'code' => 'MV-01',
         'country_code' => 'NG',
         'status' => 'active',
+    ]);
+
+    Role::query()->create([
+        'user_id' => $admin->id,
+        'scope_type' => 'cooperative',
+        'scope_id' => $cooperative->id,
     ]);
 
     $this->actingAs($admin, 'sanctum')->postJson('/api/v1/clusters', [
@@ -124,6 +131,12 @@ it('creates and lists members by cluster', function (): void {
         'status' => 'active',
     ]);
 
+    Role::query()->create([
+        'user_id' => $admin->id,
+        'scope_type' => 'cooperative',
+        'scope_id' => $cooperative->id,
+    ]);
+
     $this->actingAs($admin, 'sanctum')->postJson('/api/v1/members', [
         'cooperative_id' => $cooperative->id,
         'cluster_id' => $cluster->id,
@@ -143,4 +156,53 @@ it('creates and lists members by cluster', function (): void {
         ->assertJsonPath('data.items.0.cluster_id', $cluster->id);
 
     expect(Member::query()->count())->toBe(1);
+});
+
+it('requires explicit scope for country admins before returning cooperative listings', function (): void {
+    $countryAdmin = User::factory()->countryAdmin()->create();
+
+    Cooperative::query()->create([
+        'name' => 'Country Scoped Cooperative',
+        'code' => 'CSC-01',
+        'country_code' => 'NG',
+        'status' => 'active',
+    ]);
+
+    $response = $this->actingAs($countryAdmin, 'sanctum')->getJson('/api/v1/cooperatives');
+
+    $response
+        ->assertSuccessful()
+        ->assertJsonPath('data.items', []);
+});
+
+it('allows country admins with cooperative scope to read only assigned cooperatives', function (): void {
+    $countryAdmin = User::factory()->countryAdmin()->create();
+
+    $allowed = Cooperative::query()->create([
+        'name' => 'Allowed Country Cooperative',
+        'code' => 'ACC-01',
+        'country_code' => 'NG',
+        'status' => 'active',
+    ]);
+
+    Cooperative::query()->create([
+        'name' => 'Forbidden Country Cooperative',
+        'code' => 'FCC-01',
+        'country_code' => 'NG',
+        'status' => 'active',
+    ]);
+
+    Role::query()->create([
+        'user_id' => $countryAdmin->id,
+        'scope_type' => 'cooperative',
+        'scope_id' => $allowed->id,
+    ]);
+
+    $response = $this->actingAs($countryAdmin, 'sanctum')->getJson('/api/v1/cooperatives');
+
+    $response
+        ->assertSuccessful()
+        ->assertJsonPath('data.pagination.total', 1)
+        ->assertJsonPath('data.items.0.id', $allowed->id)
+        ->assertJsonPath('data.items.0.name', 'Allowed Country Cooperative');
 });

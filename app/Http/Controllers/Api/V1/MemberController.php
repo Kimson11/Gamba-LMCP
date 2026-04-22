@@ -12,6 +12,7 @@ use App\Models\MemberAssignment;
 use App\Services\ApprovalEventStream;
 use App\Services\AuditLogger;
 use App\Support\ApiResponse;
+use App\Support\ScopeAccess;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -22,13 +23,18 @@ class MemberController extends Controller
     public function __construct(
         private readonly AuditLogger $auditLogger,
         private readonly ApprovalEventStream $approvalEventStream,
+        private readonly ScopeAccess $scopeAccess,
     ) {}
 
     /**
      * Return members assigned to a cluster.
      */
-    public function indexByCluster(Cluster $cluster): JsonResponse
+    public function indexByCluster(Request $request, Cluster $cluster): JsonResponse
     {
+        if (! $this->scopeAccess->canAccessCluster($request->user(), $cluster)) {
+            return $this->forbiddenScopeResponse();
+        }
+
         $members = Member::query()
             ->where('cluster_id', $cluster->id)
             ->orderBy('member_number')
@@ -58,6 +64,10 @@ class MemberController extends Controller
      */
     public function store(CreateMemberRequest $request): JsonResponse
     {
+        if (! $this->scopeAccess->canAccessCooperative($request->user(), (int) $request->validated('cooperative_id'))) {
+            return $this->forbiddenScopeResponse();
+        }
+
         $member = Member::query()->create($request->validated());
 
         return ApiResponse::success([
@@ -77,8 +87,12 @@ class MemberController extends Controller
     /**
      * Return assignment timeline for one member.
      */
-    public function assignments(Member $member): JsonResponse
+    public function assignments(Request $request, Member $member): JsonResponse
     {
+        if (! $this->scopeAccess->canAccessMember($request->user(), $member)) {
+            return $this->forbiddenScopeResponse();
+        }
+
         $items = MemberAssignment::query()
             ->where('member_id', $member->id)
             ->orderBy('id')
@@ -124,13 +138,7 @@ class MemberController extends Controller
         $actor = $request->user();
         $query = MemberAssignment::query()->latest('id');
 
-        if (! $actor->isPrivileged()) {
-            $scopeCooperativeId = (int) ($actor->scopes()
-                ->where('scope_type', 'cooperative')
-                ->value('scope_id') ?? 0);
-
-            $query->where('cooperative_id', $scopeCooperativeId);
-        }
+        $this->scopeAccess->applyCooperativeScope($actor, $query, 'cooperative_id');
 
         if (isset($validated['cooperative_id'])) {
             $query->where('cooperative_id', (int) $validated['cooperative_id']);
@@ -203,13 +211,7 @@ class MemberController extends Controller
             ->where('approval_status', 'pending_approval')
             ->latest('id');
 
-        if (! $actor->isPrivileged()) {
-            $scopeCooperativeId = (int) ($actor->scopes()
-                ->where('scope_type', 'cooperative')
-                ->value('scope_id') ?? 0);
-
-            $query->where('cooperative_id', $scopeCooperativeId);
-        }
+        $this->scopeAccess->applyCooperativeScope($actor, $query, 'cooperative_id');
 
         if (isset($validated['cooperative_id'])) {
             $query->where('cooperative_id', (int) $validated['cooperative_id']);
@@ -274,6 +276,10 @@ class MemberController extends Controller
         $validated = $request->validated();
         $targetCluster = Cluster::query()->findOrFail((int) $validated['cluster_id']);
         $actor = $request->user();
+
+        if (! $this->scopeAccess->canAccessMember($actor, $member) || ! $this->scopeAccess->canAccessCluster($actor, $targetCluster)) {
+            return $this->forbiddenScopeResponse();
+        }
 
         if ((int) $member->cluster_id === (int) $targetCluster->id) {
             return ApiResponse::error(
@@ -348,6 +354,10 @@ class MemberController extends Controller
     public function approveAssignment(Request $request, MemberAssignment $memberAssignment): JsonResponse
     {
         $actor = $request->user();
+
+        if (! $this->scopeAccess->canAccessCooperative($actor, (int) $memberAssignment->cooperative_id)) {
+            return $this->forbiddenScopeResponse();
+        }
 
         if ($memberAssignment->approval_status !== 'pending_approval') {
             return ApiResponse::error(
@@ -432,6 +442,10 @@ class MemberController extends Controller
 
         $actor = $request->user();
 
+        if (! $this->scopeAccess->canAccessCooperative($actor, (int) $memberAssignment->cooperative_id)) {
+            return $this->forbiddenScopeResponse();
+        }
+
         if ($memberAssignment->approval_status !== 'pending_approval') {
             return ApiResponse::error(
                 message: 'Only pending assignments can be rejected.',
@@ -502,5 +516,14 @@ class MemberController extends Controller
             'rejected_at' => $assignment->rejected_at?->toIso8601String(),
             'rejection_reason' => $assignment->rejection_reason,
         ]);
+    }
+
+    private function forbiddenScopeResponse(): JsonResponse
+    {
+        return ApiResponse::error(
+            message: 'You are not authorized to access this resource within your assigned scope.',
+            code: 'permission_denied',
+            status: 403,
+        );
     }
 }

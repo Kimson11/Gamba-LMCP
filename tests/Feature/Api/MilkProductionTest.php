@@ -5,6 +5,7 @@ use App\Models\Cluster;
 use App\Models\Cooperative;
 use App\Models\Member;
 use App\Models\MilkProductionLog;
+use App\Models\Role;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
@@ -18,6 +19,12 @@ it('allows governance role to record milk production log', function (): void {
         'code' => 'PRD-01',
         'country_code' => 'NG',
         'status' => 'active',
+    ]);
+
+    Role::query()->create([
+        'user_id' => $admin->id,
+        'scope_type' => 'cooperative',
+        'scope_id' => $cooperative->id,
     ]);
 
     $cluster = Cluster::query()->create([
@@ -67,6 +74,12 @@ it('rejects mismatched member and cluster combination', function (): void {
         'status' => 'active',
     ]);
 
+    Role::query()->create([
+        'user_id' => $admin->id,
+        'scope_type' => 'cooperative',
+        'scope_id' => $cooperative->id,
+    ]);
+
     $clusterOne = Cluster::query()->create([
         'cooperative_id' => $cooperative->id,
         'name' => 'Assigned Cluster',
@@ -111,6 +124,12 @@ it('lists milk production logs by cluster', function (): void {
         'code' => 'LST-01',
         'country_code' => 'NG',
         'status' => 'active',
+    ]);
+
+    Role::query()->create([
+        'user_id' => $admin->id,
+        'scope_type' => 'cooperative',
+        'scope_id' => $cooperative->id,
     ]);
 
     $cluster = Cluster::query()->create([
@@ -185,6 +204,12 @@ it('returns daily milk totals for a cluster', function (): void {
         'status' => 'active',
     ]);
 
+    Role::query()->create([
+        'user_id' => $admin->id,
+        'scope_type' => 'cooperative',
+        'scope_id' => $cooperative->id,
+    ]);
+
     $cluster = Cluster::query()->create([
         'cooperative_id' => $cooperative->id,
         'name' => 'Totals Cluster',
@@ -254,6 +279,12 @@ it('returns daily milk totals for a member', function (): void {
         'code' => 'MTC-01',
         'country_code' => 'NG',
         'status' => 'active',
+    ]);
+
+    Role::query()->create([
+        'user_id' => $admin->id,
+        'scope_type' => 'cooperative',
+        'scope_id' => $cooperative->id,
     ]);
 
     $cluster = Cluster::query()->create([

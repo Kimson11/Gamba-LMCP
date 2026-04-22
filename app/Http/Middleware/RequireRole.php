@@ -37,7 +37,7 @@ class RequireRole
         // already rejected the request. This is a safety net.
         if ($user === null) {
             return ApiResponse::error(
-                message: 'Unauthenticated.',
+                message: __('api.errors.unauthenticated'),
                 code: 'unauthenticated',
                 status: 401,
             );
@@ -55,7 +55,7 @@ class RequireRole
         // in_array with strict=true uses === for enum comparison.
         if (! in_array($user->role, $allowedRoles, strict: true)) {
             return ApiResponse::error(
-                message: 'You are not authorized to perform this action.',
+                message: __('api.errors.permission_denied'),
                 code: 'permission_denied',
                 status: 403,
             );

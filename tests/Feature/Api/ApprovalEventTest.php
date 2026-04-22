@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\ApprovalEvent;
+use App\Models\TrustedDevice;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
@@ -45,7 +46,14 @@ it('denies non-privileged users from approve transition', function () {
 
 it('allows privileged roles to approve after submit', function () {
     $member = User::factory()->member()->create();
-    $coopAdmin = User::factory()->coopAdmin()->create();
+    $coopAdmin = User::factory()->coopAdmin()->create([
+        'mfa_enabled' => true,
+    ]);
+    $trustedDevice = TrustedDevice::query()->create([
+        'user_id' => $coopAdmin->id,
+        'device_fingerprint' => 'approval-privileged-device-9003',
+        'device_name' => 'Approval Console',
+    ]);
 
     $this->actingAs($member, 'sanctum')->postJson(
         '/api/v1/approvals/payout_request/9003/submit',
@@ -56,7 +64,11 @@ it('allows privileged roles to approve after submit', function () {
     $approveResponse = $this->actingAs($coopAdmin, 'sanctum')->postJson(
         '/api/v1/approvals/payout_request/9003/approve',
         ['metadata' => ['approved_by' => 'finance-board']],
-        ['Idempotency-Key' => 'approval-approve-9003']
+        [
+            'Idempotency-Key' => 'approval-approve-9003',
+            'X-MFA-Verified' => 'true',
+            'X-Trusted-Device-Id' => (string) $trustedDevice->id,
+        ]
     );
 
     $approveResponse
@@ -69,13 +81,24 @@ it('allows privileged roles to approve after submit', function () {
 });
 
 it('returns transition error when approving without pending status', function () {
-    $admin = User::factory()->coopAdmin()->create();
+    $admin = User::factory()->coopAdmin()->create([
+        'mfa_enabled' => true,
+    ]);
+    $trustedDevice = TrustedDevice::query()->create([
+        'user_id' => $admin->id,
+        'device_fingerprint' => 'approval-privileged-device-9004',
+        'device_name' => 'Approval Console',
+    ]);
 
     // No submit event exists for entity 9004, so approve must fail.
     $response = $this->actingAs($admin, 'sanctum')->postJson(
         '/api/v1/approvals/payout_request/9004/approve',
         [],
-        ['Idempotency-Key' => 'approval-approve-9004']
+        [
+            'Idempotency-Key' => 'approval-approve-9004',
+            'X-MFA-Verified' => 'true',
+            'X-Trusted-Device-Id' => (string) $trustedDevice->id,
+        ]
     );
 
     $response
@@ -85,7 +108,14 @@ it('returns transition error when approving without pending status', function ()
 
 it('requires reason when rejecting or reversing', function () {
     $member = User::factory()->member()->create();
-    $admin = User::factory()->coopAdmin()->create();
+    $admin = User::factory()->coopAdmin()->create([
+        'mfa_enabled' => true,
+    ]);
+    $trustedDevice = TrustedDevice::query()->create([
+        'user_id' => $admin->id,
+        'device_fingerprint' => 'approval-privileged-device-9005',
+        'device_name' => 'Approval Console',
+    ]);
 
     $this->actingAs($member, 'sanctum')->postJson(
         '/api/v1/approvals/payout_request/9005/submit',
@@ -97,7 +127,11 @@ it('requires reason when rejecting or reversing', function () {
     $this->actingAs($admin, 'sanctum')->postJson(
         '/api/v1/approvals/payout_request/9005/reject',
         [],
-        ['Idempotency-Key' => 'approval-reject-9005']
+        [
+            'Idempotency-Key' => 'approval-reject-9005',
+            'X-MFA-Verified' => 'true',
+            'X-Trusted-Device-Id' => (string) $trustedDevice->id,
+        ]
     )
         ->assertUnprocessable()
         ->assertJsonPath('code', 'validation_failed');
@@ -105,7 +139,14 @@ it('requires reason when rejecting or reversing', function () {
 
 it('returns ordered timeline for one entity', function () {
     $member = User::factory()->member()->create();
-    $admin = User::factory()->coopAdmin()->create();
+    $admin = User::factory()->coopAdmin()->create([
+        'mfa_enabled' => true,
+    ]);
+    $trustedDevice = TrustedDevice::query()->create([
+        'user_id' => $admin->id,
+        'device_fingerprint' => 'approval-privileged-device-9006',
+        'device_name' => 'Approval Console',
+    ]);
 
     $this->actingAs($member, 'sanctum')->postJson(
         '/api/v1/approvals/payout_request/9006/submit',
@@ -116,7 +157,11 @@ it('returns ordered timeline for one entity', function () {
     $this->actingAs($admin, 'sanctum')->postJson(
         '/api/v1/approvals/payout_request/9006/approve',
         [],
-        ['Idempotency-Key' => 'approval-approve-9006']
+        [
+            'Idempotency-Key' => 'approval-approve-9006',
+            'X-MFA-Verified' => 'true',
+            'X-Trusted-Device-Id' => (string) $trustedDevice->id,
+        ]
     )->assertCreated();
 
     $timeline = $this->actingAs($admin, 'sanctum')->getJson('/api/v1/approvals/payout_request/9006/events');

@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\LoginRequest;
 use App\Services\AuditLogger;
 use App\Support\ApiResponse;
+use App\Support\ScopeAccess;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -58,7 +59,7 @@ class AuthController extends Controller
      * Failure (401):
      *   { "message": "Invalid credentials.", "code": "invalid_credentials", ... }
      */
-    public function login(LoginRequest $request): JsonResponse
+    public function login(LoginRequest $request, ScopeAccess $scopeAccess): JsonResponse
     {
         // Attempt to authenticate using the validated email and password.
         // Auth::attempt() hashes the password and compares against the stored hash.
@@ -104,7 +105,43 @@ class AuthController extends Controller
                 // Flutter client can make role-aware routing decisions.
                 'role' => $user->role->value,
             ],
+            'scopes' => $scopeAccess->summary($user),
+            'linked_member' => $this->serializeLinkedMember($scopeAccess->linkedMember($user)),
+            'security' => [
+                'mfa_enabled' => (bool) $user->mfa_enabled,
+                'privileged_session_required' => $user->isPrivileged(),
+            ],
         ], status: 201);
+    }
+
+    /**
+     * Return the current authenticated user, scopes, and session baseline.
+     */
+    public function me(Request $request, ScopeAccess $scopeAccess): JsonResponse
+    {
+        $user = $request->user();
+        $currentToken = $user?->currentAccessToken();
+
+        return ApiResponse::success([
+            'user' => [
+                'id' => $user?->id,
+                'name' => $user?->name,
+                'email' => $user?->email,
+                'role' => $user?->role?->value,
+            ],
+            'scopes' => $scopeAccess->summary($user),
+            'linked_member' => $this->serializeLinkedMember($scopeAccess->linkedMember($user)),
+            'token' => [
+                'id' => $currentToken?->id,
+                'name' => $currentToken?->name,
+                'last_used_at' => $currentToken?->last_used_at?->toIso8601String(),
+            ],
+            'security' => [
+                'mfa_enabled' => (bool) $user?->mfa_enabled,
+                'privileged_session_required' => (bool) $user?->isPrivileged(),
+                'trusted_device_count' => $user?->trustedDevices()->count() ?? 0,
+            ],
+        ]);
     }
 
     /**
@@ -133,5 +170,25 @@ class AuthController extends Controller
         $token->delete();
 
         return ApiResponse::success(['message' => 'Logged out successfully.']);
+    }
+
+    /**
+     * Normalize the linked member payload returned during session bootstrap.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function serializeLinkedMember(?object $member): ?array
+    {
+        if ($member === null) {
+            return null;
+        }
+
+        return [
+            'id' => $member->id,
+            'cooperative_id' => $member->cooperative_id,
+            'cluster_id' => $member->cluster_id,
+            'member_number' => $member->member_number,
+            'status' => $member->status,
+        ];
     }
 }
