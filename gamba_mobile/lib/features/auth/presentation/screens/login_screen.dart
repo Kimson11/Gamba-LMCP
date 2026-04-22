@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 
+import '../../../../core/constants/env.dart';
 import '../controllers/auth_controller.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -75,14 +77,20 @@ class _LoginScreenState extends State<LoginScreen> {
                             children: [
                               Text(
                                 'Gamba',
-                                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .headlineMedium
+                                    ?.copyWith(
                                       fontWeight: FontWeight.w700,
                                     ),
                               ),
                               const SizedBox(height: 8),
                               Text(
                                 'Secure cooperative operations for field teams and members.',
-                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodyMedium
+                                    ?.copyWith(
                                       color: Colors.black.withOpacity(0.7),
                                     ),
                               ),
@@ -146,15 +154,34 @@ class _LoginScreenState extends State<LoginScreen> {
                                 },
                               ),
                               const SizedBox(height: 24),
+                              if (kDebugMode) ...[
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFE8F3F2),
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: Text(
+                                    'API: ${Env.apiBaseUrl}',
+                                    style:
+                                        Theme.of(context).textTheme.bodySmall,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                              ],
                               SizedBox(
                                 width: double.infinity,
                                 child: FilledButton(
-                                  onPressed: widget.controller.isSubmitting ? null : _submit,
+                                  onPressed: widget.controller.isSubmitting
+                                      ? null
+                                      : _submit,
                                   child: widget.controller.isSubmitting
                                       ? const SizedBox(
                                           height: 20,
                                           width: 20,
-                                          child: CircularProgressIndicator(strokeWidth: 2),
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2),
                                         )
                                       : const Text('Sign in'),
                                 ),

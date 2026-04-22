@@ -34,7 +34,9 @@ class AuthController extends ChangeNotifier {
 
     try {
       _session = await authRepository.restoreSession();
-      _status = _session == null ? AuthStatus.unauthenticated : AuthStatus.authenticated;
+      _status = _session == null
+          ? AuthStatus.unauthenticated
+          : AuthStatus.authenticated;
       _errorMessage = null;
     } on ApiException catch (exception) {
       _session = null;
@@ -70,6 +72,12 @@ class AuthController extends ChangeNotifier {
       _session = null;
       _status = AuthStatus.failure;
       _errorMessage = exception.message;
+      return false;
+    } catch (_) {
+      _session = null;
+      _status = AuthStatus.failure;
+      _errorMessage =
+          'Unable to sign in. Check API connection settings and try again.';
       return false;
     } finally {
       _isSubmitting = false;
